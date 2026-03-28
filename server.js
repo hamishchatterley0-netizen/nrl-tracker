@@ -2,9 +2,7 @@ const express = require('express');
 const cors = require('cors');
  
 const app = express();
-app.use(cors({
-  origin: ['https://nrlplayerperformance.netlify.app', 'http://localhost:3000', 'http://localhost:5000']
-}));
+app.use(cors());
  
 const PORT = process.env.PORT || 3000;
 const CURRENT_SEASON = 2025;
@@ -17,8 +15,12 @@ const CACHE_TTL = 60 * 1000;
 async function fetchFromNRL(url) {
   const res = await fetch(url, {
     headers: {
-      'Accept': 'application/json',
-      'User-Agent': 'Mozilla/5.0',
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'en-AU,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Origin': 'https://www.nrl.com',
+      'Referer': 'https://www.nrl.com/',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     }
   });
   if (!res.ok) throw new Error(`NRL API error: ${res.status}`);
@@ -96,3 +98,4 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
+ 
