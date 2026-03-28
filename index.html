@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NRL Performance Points</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f4f4f2; color: #1a1a1a; min-height: 100vh; }
+    header { background: #1a1a1a; color: #fff; padding: 1.25rem 1.5rem; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 20px; font-weight: 500; }
+    header .badge { background: #2d9e75; color: #fff; font-size: 11px; padding: 3px 8px; border-radius: 99px; }
+    .main { max-width: 960px; margin: 0 auto; padding: 1.5rem 1rem; }
+    .formula { background: #fff; border: 0.5px solid #e0e0dc; border-radius: 10px; padding: 10px 14px; margin-bottom: 1.25rem; font-size: 12px; color: #666; display: flex; gap: 16px; flex-wrap: wrap; }
+    .formula b { color: #1a1a1a; font-weight: 500; }
+    .controls { display: flex; gap: 10px; margin-bottom: 1rem; flex-wrap: wrap; }
+    .controls input, .controls select { font-size: 13px; padding: 7px 10px; border: 0.5px solid #ccc; border-radius: 8px; background: #fff; color: #1a1a1a; height: 36px; }
+    .controls input { flex: 1; min-width: 160px; }
+    .round-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 1.25rem; }
+    .round-tab { font-size: 12px; padding: 5px 12px; border: 0.5px solid #ccc; border-radius: 99px; background: #fff; color: #666; cursor: pointer; }
+    .round-tab.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; font-weight: 500; }
+    .refresh-bar { font-size: 12px; color: #999; margin-bottom: 1rem; display: flex; align-items: center; gap: 8px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #2d9e75; display: inline-block; }
+    .dot.stale { background: #ccc; }
+    .card { background: #fff; border: 0.5px solid #e0e0dc; border-radius: 12px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead th { text-align: left; font-weight: 500; font-size: 11px; color: #999; padding: 10px 12px; border-bottom: 0.5px solid #e0e0dc; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; user-select: none; white-space: nowrap; }
+    thead th:hover { color: #1a1a1a; }
+    thead th.sorted { color: #1a1a1a; }
+    tbody tr { border-bottom: 0.5px solid #f0f0ec; }
+    tbody tr:hover { background: #fafaf8; }
+    tbody tr:last-child { border-bottom: none; }
+    td { padding: 10px 12px; vertical-align: middle; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .rank { font-size: 12px; color: #bbb; }
+    .player-name { font-weight: 500; font-size: 14px; }
+    .team-badge { font-size: 11px; color: #888; }
+    .pts-badge { display: inline-block; background: #e8f5ee; color: #0f6e56; font-weight: 500; padding: 3px 10px; border-radius: 8px; min-width: 44px; text-align: center; }
+    .loading { text-align: center; padding: 3rem; color: #999; }
+    .error { text-align: center; padding: 2rem; color: #a32d2d; background: #fcebeb; border-radius: 10px; margin: 1rem 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>NRL Performance Points</h1>
+    <span class="badge">Live</span>
+  </header>
+
+  <div class="main">
+    <div class="formula">
+      <span><b>1 pt</b> per 10m gained</span>
+      <span><b>1 pt</b> per tackle</span>
+      <span><b>4 pts</b> per point scored</span>
+      <span><b>3 pts</b> per try assist</span>
+    </div>
+
+    <div class="round-tabs" id="roundTabs"></div>
+
+    <div class="controls">
+      <input type="text" id="search" placeholder="Search player or team..." oninput="renderTable()" />
+      <select id="teamFilter" onchange="renderTable()">
+        <option value="">All teams</option>
+      </select>
+      <select id="posFilter" onchange="renderTable()">
+        <option value="">All positions</option>
+      </select>
+    </div>
+
+    <div class="refresh-bar">
+      <span class="dot" id="dot"></span>
+      <span id="refreshLabel">Connecting...</span>
+    </div>
+
+    <div class="card">
+      <div id="tableWrap"><div class="loading">Loading...</div></div>
+    </div>
+  </div>
+
+  <script>
+    // ---- CONFIG: point this at your server ----
+    const API_BASE = 'http://localhost:3000';
+    // -------------------------------------------
+
+    const ROUNDS = Array.from({length: 27}, (_, i) => i + 1);
+    let allPlayers = [];
+    let sortCol = 'perfPoints';
+    let sortDir = -1;
+    let activeRound = 1;
+    let refreshTimer = null;
+
+    function calcPerfPoints(p) {
+      return Math.floor((p.metres || 0) / 10)
+        + (p.tackles || 0)
+        + (p.points || 0) * 4
+        + (p.tryAssists || 0) * 3;
+    }
+
+    async function loadRound(round) {
+      const res = await fetch(`${API_BASE}/stats?round=${round}`);
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
+      const data = await res.json();
+      return data.players || [];
+    }
+
+    function renderRoundTabs() {
+      document.getElementById('roundTabs').innerHTML = ROUNDS.map(r =>
+        `<div class="round-tab${r === activeRound ? ' active' : ''}" onclick="selectRound(${r})">Rd ${r}</div>`
+      ).join('');
+    }
+
+    async function selectRound(r) {
+      activeRound = r;
+      renderRoundTabs();
+      clearInterval(refreshTimer);
+      await fetchAndRender();
+      refreshTimer = setInterval(fetchAndRender, 60000);
+    }
+
+    async function fetchAndRender() {
+      setDot(false);
+      document.getElementById('refreshLabel').textContent = 'Fetching...';
+      try {
+        allPlayers = await loadRound(activeRound);
+        populateFilters(allPlayers);
+        renderTable();
+        setDot(true);
+        document.getElementById('refreshLabel').textContent = `Updated ${new Date().toLocaleTimeString()} · refreshes every 60s`;
+      } catch(e) {
+        setDot(false);
+        document.getElementById('refreshLabel').textContent = 'Could not reach server';
+        document.getElementById('tableWrap').innerHTML = `<div class="error">Could not connect to server.<br>Make sure your server is running at ${API_BASE}</div>`;
+      }
+    }
+
+    function setDot(live) {
+      document.getElementById('dot').className = 'dot' + (live ? '' : ' stale');
+    }
+
+    function populateFilters(players) {
+      const teams = [...new Set(players.map(p => p.team))].sort();
+      const positions = [...new Set(players.map(p => p.position))].filter(Boolean).sort();
+      const ts = document.getElementById('teamFilter');
+      const ps = document.getElementById('posFilter');
+      const tv = ts.value, pv = ps.value;
+      ts.innerHTML = '<option value="">All teams</option>' + teams.map(t => `<option value="${t}">${t}</option>`).join('');
+      ps.innerHTML = '<option value="">All positions</option>' + positions.map(p => `<option value="${p}">${p}</option>`).join('');
+      ts.value = tv; ps.value = pv;
+    }
+
+    function renderTable() {
+      const search = document.getElementById('search').value.toLowerCase();
+      const teamF = document.getElementById('teamFilter').value;
+      const posF = document.getElementById('posFilter').value;
+
+      let players = allPlayers.map(p => ({ ...p, perfPoints: p.perfPoints ?? calcPerfPoints(p) }));
+      if (search) players = players.filter(p => p.name.toLowerCase().includes(search) || p.team.toLowerCase().includes(search));
+      if (teamF) players = players.filter(p => p.team === teamF);
+      if (posF) players = players.filter(p => p.position === posF);
+      players.sort((a, b) => sortDir * ((b[sortCol] || 0) - (a[sortCol] || 0)));
+
+      const cols = [
+        { key: 'rank', label: '#', sortable: false },
+        { key: 'name', label: 'Player', sortable: false },
+        { key: 'metres', label: 'Metres', sortable: true },
+        { key: 'tackles', label: 'Tackles', sortable: true },
+        { key: 'points', label: 'Pts scored', sortable: true },
+        { key: 'tryAssists', label: 'TA', sortable: true },
+        { key: 'perfPoints', label: 'Perf pts', sortable: true },
+      ];
+
+      const thead = cols.map(c => {
+        if (!c.sortable) return `<th>${c.label}</th>`;
+        const active = sortCol === c.key;
+        const arrow = sortDir === -1 ? '↓' : '↑';
+        return `<th class="${active ? 'sorted' : ''}" onclick="setSort('${c.key}')">${c.label}${active ? ` ${arrow}` : ''}</th>`;
+      }).join('');
+
+      const tbody = players.slice(0, 50).map((p, i) => `
+        <tr>
+          <td class="num rank">${i + 1}</td>
+          <td>
+            <div class="player-name">${p.name}</div>
+            <div class="team-badge">${p.team}${p.position ? ' · ' + p.position : ''}</div>
+          </td>
+          <td class="num">${p.metres}</td>
+          <td class="num">${p.tackles}</td>
+          <td class="num">${p.points}</td>
+          <td class="num">${p.tryAssists}</td>
+          <td class="num"><span class="pts-badge">${p.perfPoints}</span></td>
+        </tr>
+      `).join('');
+
+      document.getElementById('tableWrap').innerHTML = `
+        <table>
+          <thead><tr>${thead}</tr></thead>
+          <tbody>${tbody || '<tr><td colspan="7" style="text-align:center;padding:2rem;color:#999">No players found</td></tr>'}</tbody>
+        </table>
+      `;
+    }
+
+    function setSort(col) {
+      if (sortCol === col) sortDir *= -1;
+      else { sortCol = col; sortDir = -1; }
+      renderTable();
+    }
+
+    renderRoundTabs();
+    selectRound(1);
+  </script>
+</body>
+</html>
