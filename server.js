@@ -1,17 +1,19 @@
 const express = require('express');
 const cors = require('cors');
-
+ 
 const app = express();
-app.use(cors());
-
+app.use(cors({
+  origin: ['https://nrlplayerperformance.netlify.app', 'http://localhost:3000', 'http://localhost:5000']
+}));
+ 
 const PORT = process.env.PORT || 3000;
 const CURRENT_SEASON = 2025;
 const LEAGUE_ID = 111;
-
+ 
 let cachedStats = {};
 let lastFetch = {};
 const CACHE_TTL = 60 * 1000;
-
+ 
 async function fetchFromNRL(url) {
   const res = await fetch(url, {
     headers: {
@@ -22,15 +24,15 @@ async function fetchFromNRL(url) {
   if (!res.ok) throw new Error(`NRL API error: ${res.status}`);
   return res.json();
 }
-
+ 
 function calcPerfPoints(p) {
   const metres = Math.floor((p.runMetres || p.metres || 0) / 10);
   const tackles = p.tackles || 0;
   const points = (p.pointsScored || p.points || 0) * 4;
-  const tryAssists = (p.tryAssists || 0) * 3;
+  const tryAssists = (p.tryAssists || 0) * 10;
   return metres + tackles + points + tryAssists;
 }
-
+ 
 function mapPlayer(p) {
   return {
     name: p.playerName || p.name || 'Unknown',
@@ -43,30 +45,30 @@ function mapPlayer(p) {
     perfPoints: calcPerfPoints(p),
   };
 }
-
+ 
 async function getStats(round) {
   const now = Date.now();
   const cacheKey = `round_${round}`;
-
+ 
   if (cachedStats[cacheKey] && (now - lastFetch[cacheKey]) < CACHE_TTL) {
     return cachedStats[cacheKey];
   }
-
+ 
   const url = `https://api.nrl.com/v1/leagues/${LEAGUE_ID}/seasons/${CURRENT_SEASON}/rounds/${round}/stats`;
   const data = await fetchFromNRL(url);
-
+ 
   const raw = Array.isArray(data) ? data
     : Array.isArray(data.playerStats) ? data.playerStats
     : [];
-
+ 
   const players = raw.map(mapPlayer);
   players.sort((a, b) => b.perfPoints - a.perfPoints);
-
+ 
   cachedStats[cacheKey] = players;
   lastFetch[cacheKey] = now;
   return players;
 }
-
+ 
 app.get('/stats', async (req, res) => {
   const round = parseInt(req.query.round) || 1;
   try {
@@ -76,7 +78,7 @@ app.get('/stats', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
+ 
 app.get('/rounds', async (req, res) => {
   try {
     const url = `https://api.nrl.com/v1/leagues/${LEAGUE_ID}/seasons/${CURRENT_SEASON}/rounds`;
@@ -86,11 +88,11 @@ app.get('/rounds', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
+ 
 app.get('/', (req, res) => {
   res.json({ status: 'NRL Tracker API running', endpoints: ['/stats?round=1', '/rounds'] });
 });
-
+ 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
